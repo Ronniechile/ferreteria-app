@@ -1,17 +1,19 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import jsPDF from "jspdf"
+import autoTable from "jspdf-autotable"
 import { Header } from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from "@/components/ui/dialog"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { Plus, FileSignature, Users, Mail, Trash2 } from "lucide-react"
+import { Plus, FileSignature, Users, Mail, Trash2, FileDown } from "lucide-react"
 import {
   addBudget,
   deleteBudget,
@@ -59,17 +61,19 @@ export default function PresupuestosPage() {
   const [statusFilter, setStatusFilter] = useState<"all" | BudgetStatus>("all")
   const [search, setSearch] = useState("")
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false)
+  const [selectedBudget, setSelectedBudget] = useState<Budget | null>(null)
   const [nextSequence, setNextSequence] = useState(1)
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<Omit<Budget, "id" | "total" | "createdAt" | "updatedAt">>({
     budgetNumber: formatBudgetNumber(1),
     clientName: "",
     clientEmail: "",
     validUntil: new Date().toISOString().split("T")[0],
     status: "borrador" as BudgetStatus,
     notes: "",
+    items: [],
   })
-  const [items, setItems] = useState<BudgetItem[]>([])
-  const [currentItem, setCurrentItem] = useState({
+  const [currentItem, setCurrentItem] = useState<Omit<BudgetItem, "productName" | "subtotal"> & { productId: string }>({
     productId: "",
     quantity: 1,
     unitPrice: 0,
@@ -120,15 +124,15 @@ export default function PresupuestosPage() {
       unitPrice: currentItem.unitPrice,
       subtotal: currentItem.quantity * currentItem.unitPrice,
     }
-    setItems([...items, newItem])
+    setFormData({ ...formData, items: [...formData.items, newItem] })
     setCurrentItem({ productId: "", quantity: 1, unitPrice: 0 })
   }
 
   const removeItem = (index: number) => {
-    setItems(items.filter((_, i) => i !== index))
+    setFormData({ ...formData, items: formData.items.filter((_, i) => i !== index) })
   }
 
-  const calculateTotal = () => items.reduce((acc, item) => acc + item.subtotal, 0)
+  const calculateTotal = (items: BudgetItem[]) => items.reduce((acc, item) => acc + item.subtotal, 0)
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault()
@@ -137,21 +141,15 @@ export default function PresupuestosPage() {
       alert("Ese número de presupuesto ya existe. Ingresa uno diferente.")
       return
     }
-    if (!formData.clientName || items.length === 0) {
+    if (!formData.clientName || formData.items.length === 0) {
       alert("Ingresa los datos del cliente y al menos un producto")
       return
     }
 
     const newBudget: Budget = {
       id: crypto.randomUUID(),
-      budgetNumber: normalizedBudgetNumber,
-      clientName: formData.clientName,
-      clientEmail: formData.clientEmail,
-      validUntil: formData.validUntil,
-      status: formData.status,
-      notes: formData.notes,
-      items,
-      total: calculateTotal(),
+      ...formData,
+      total: calculateTotal(formData.items),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
@@ -175,8 +173,8 @@ export default function PresupuestosPage() {
       validUntil: new Date().toISOString().split("T")[0],
       status: "borrador",
       notes: "",
+      items: [],
     })
-    setItems([])
     setCurrentItem({ productId: "", quantity: 1, unitPrice: 0 })
     if (shouldClose) {
       setIsDialogOpen(false)
@@ -203,6 +201,60 @@ export default function PresupuestosPage() {
       setBudgets(getBudgets())
     }
   }
+
+  const handleDownloadPdf = (budget: Budget) => {
+    const doc = new jsPDF()
+
+    // Add header
+    doc.setFontSize(20)
+    doc.text("Presupuesto", 14, 22)
+    doc.setFontSize(12)
+    doc.text(`Presupuesto #: ${budget.budgetNumber}`, 14, 32)
+    doc.text(`Fecha: ${new Date(budget.createdAt).toLocaleDateString("es-CL")}`, 14, 42)
+    doc.text(`Válido hasta: ${new Date(budget.validUntil).toLocaleDateString("es-CL")}`, 120, 42)
+
+    // Add client details
+    doc.setFontSize(14)
+    doc.text("Cliente:", 14, 60)
+    doc.setFontSize(12)
+    doc.text(budget.clientName, 14, 70)
+    doc.text(budget.clientEmail, 14, 80)
+
+    // Add table
+    const tableColumn = ["Producto", "Cantidad", "Precio Unitario", "Subtotal"];
+    const tableRows: (string | number)[][] = [];
+
+    budget.items.forEach(item => {
+      const itemData = [
+        item.productName,
+        item.quantity,
+        `$${item.unitPrice.toLocaleString("es-CL")}`,
+        `$${item.subtotal.toLocaleString("es-CL")}`
+      ];
+      tableRows.push(itemData);
+    });
+
+    autoTable(doc, { 
+      startY: 90,
+      head: [tableColumn],
+      body: tableRows,
+    });
+
+    // Add total
+    const finalY = (doc as any).lastAutoTable.finalY;
+    doc.setFontSize(14)
+    doc.text("Total:", 14, finalY + 10)
+    doc.text(`$${budget.total.toLocaleString("es-CL")}`, 150, finalY + 10)
+
+    // Add notes
+    if (budget.notes) {
+      doc.setFontSize(12)
+      doc.text("Notas:", 14, finalY + 30)
+      doc.text(budget.notes, 14, finalY + 40)
+    }
+
+    doc.save(`${budget.budgetNumber}.pdf`);
+  };
 
   const totalBudgets = budgets.length
   const approvedBudgets = budgets.filter((budget) => budget.status === "aprobado").length
@@ -273,7 +325,7 @@ export default function PresupuestosPage() {
               <DialogHeader>
                 <DialogTitle>Crear Presupuesto</DialogTitle>
               </DialogHeader>
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <form id="budget-form" onSubmit={handleSubmit} className="space-y-4 p-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="budgetNumber">Presupuesto #</Label>
@@ -384,7 +436,7 @@ export default function PresupuestosPage() {
                     />
                   </div>
 
-                  {items.length > 0 && (
+                  {formData.items.length > 0 && (
                     <div className="border rounded-lg overflow-hidden">
                       <Table>
                         <TableHeader>
@@ -397,7 +449,7 @@ export default function PresupuestosPage() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {items.map((item, index) => (
+                          {formData.items.map((item, index) => (
                             <TableRow key={`${item.productId}-${index}`}>
                               <TableCell>{item.productName}</TableCell>
                               <TableCell className="text-right">{item.quantity}</TableCell>
@@ -415,7 +467,7 @@ export default function PresupuestosPage() {
                               Total
                             </TableCell>
                             <TableCell className="text-right font-semibold">
-                              ${calculateTotal().toLocaleString("es-CL")}
+                              ${calculateTotal(formData.items).toLocaleString("es-CL")}
                             </TableCell>
                             <TableCell />
                           </TableRow>
@@ -424,14 +476,15 @@ export default function PresupuestosPage() {
                     </div>
                   )}
                 </div>
-
-                <div className="flex justify-end gap-2">
-                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Cancelar
-                  </Button>
-                  <Button type="submit">Guardar Presupuesto</Button>
-                </div>
               </form>
+              <div className="flex justify-end gap-2 p-6 border-t">
+                <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                  Cancelar
+                </Button>
+                <Button type="submit" form="budget-form">
+                  Guardar Presupuesto
+                </Button>
+              </div>
             </DialogContent>
           </Dialog>
         </div>
@@ -486,6 +539,11 @@ export default function PresupuestosPage() {
                                 <SelectItem value="aprobado">Aprobado</SelectItem>
                               </SelectContent>
                             </Select>
+                            <Button variant="ghost" size="icon" onClick={() => handleDownloadPdf(budget)}>
+                              <span className="inline-flex h-6 w-10 items-center justify-center rounded bg-red-500 text-[10px] font-bold uppercase tracking-wide text-white">
+                                PDF
+                              </span>
+                            </Button>
                             <Button variant="ghost" size="icon" onClick={() => handleDelete(budget.id)}>
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
@@ -498,7 +556,8 @@ export default function PresupuestosPage() {
             </Table>
           </CardContent>
         </Card>
-      </div>
+
+                    </div>
     </div>
   )
 }
