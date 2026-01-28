@@ -13,17 +13,21 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { Plus, FileSignature, Users, Mail, Trash2, FileDown } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Plus, FileSignature, Users, Mail, Trash2, FileDown, Settings } from "lucide-react"
 import {
   addBudget,
   deleteBudget,
   getBudgets,
   getBudgetSequence,
   getProducts,
+  getFamilies,
+  getSettings,
   setBudgetSequence,
   updateBudgetStatus,
 } from "@/lib/storage"
-import type { Budget, BudgetItem, BudgetStatus, Product } from "@/lib/types"
+import { calculateFinalProductPrice } from "@/lib/pricing"
+import type { Budget, BudgetItem, BudgetStatus, Product, Family, AppSettings } from "@/lib/types"
 
 const statusLabels: Record<BudgetStatus, string> = {
   borrador: "Borrador",
@@ -58,12 +62,22 @@ const computeNextSequenceValue = (code: string, currentSequence: number): number
 export default function PresupuestosPage() {
   const [budgets, setBudgets] = useState<Budget[]>([])
   const [products, setProducts] = useState<Product[]>([])
+  const [families, setFamilies] = useState<Family[]>([])
+  const [settings, setSettings] = useState<AppSettings>({
+    generalMargin: 30,
+    priceRounding: true,
+    roundingTarget: 990,
+    storeName: "",
+    storeAddress: "",
+    storePhone: "",
+  })
   const [statusFilter, setStatusFilter] = useState<"all" | BudgetStatus>("all")
   const [search, setSearch] = useState("")
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [selectedBudget, setSelectedBudget] = useState<Budget | null>(null)
   const [nextSequence, setNextSequence] = useState(1)
+
   const [formData, setFormData] = useState<Omit<Budget, "id" | "total" | "createdAt" | "updatedAt">>({
     budgetNumber: formatBudgetNumber(1),
     clientName: "",
@@ -76,13 +90,18 @@ export default function PresupuestosPage() {
   const [currentItem, setCurrentItem] = useState<Omit<BudgetItem, "productName" | "subtotal"> & { productId: string }>({
     productId: "",
     quantity: 1,
+    baseUnitPrice: 0,
+    marginPercentage: 30,
     unitPrice: 0,
   })
 
   useEffect(() => {
     const storedProducts = getProducts()
+    const storedFamilies = getFamilies()
     const storedBudgets = getBudgets()
     const storedSequence = getBudgetSequence()
+    const storedSettings = getSettings()
+    
     const maxExistingSequence = storedBudgets.reduce((maxValue, budget) => {
       const numeric = extractSequenceFromCode(budget.budgetNumber)
       if (numeric !== null && numeric > maxValue) {
@@ -91,10 +110,14 @@ export default function PresupuestosPage() {
       return maxValue
     }, 0)
     const initialSequence = Math.max(storedSequence, maxExistingSequence + 1)
+    
     setProducts(storedProducts)
+    setFamilies(storedFamilies)
     setBudgets(storedBudgets)
+    setSettings(storedSettings)
     setNextSequence(initialSequence)
     setBudgetSequence(initialSequence)
+    
     setFormData((prev) => ({
       ...prev,
       budgetNumber: formatBudgetNumber(initialSequence),
@@ -117,15 +140,29 @@ export default function PresupuestosPage() {
     const product = products.find((p) => p.id === currentItem.productId)
     if (!product) return
 
+    const pricing = calculateFinalProductPrice(
+      product,
+      families,
+      settings
+    )
+
     const newItem: BudgetItem = {
       productId: product.id,
       productName: product.name,
       quantity: currentItem.quantity,
-      unitPrice: currentItem.unitPrice,
-      subtotal: currentItem.quantity * currentItem.unitPrice,
+      baseUnitPrice: pricing.basePrice,
+      marginPercentage: pricing.marginPercentage,
+      unitPrice: pricing.finalPrice,
+      subtotal: currentItem.quantity * pricing.finalPrice,
     }
     setFormData({ ...formData, items: [...formData.items, newItem] })
-    setCurrentItem({ productId: "", quantity: 1, unitPrice: 0 })
+    setCurrentItem({ 
+      productId: "", 
+      quantity: 1, 
+      baseUnitPrice: 0,
+      marginPercentage: 30,
+      unitPrice: 0,
+    })
   }
 
   const removeItem = (index: number) => {
@@ -175,7 +212,13 @@ export default function PresupuestosPage() {
       notes: "",
       items: [],
     })
-    setCurrentItem({ productId: "", quantity: 1, unitPrice: 0 })
+    setCurrentItem({ 
+      productId: "", 
+      quantity: 1, 
+      baseUnitPrice: 0,
+      marginPercentage: settings.generalMargin,
+      unitPrice: 0,
+    })
     if (shouldClose) {
       setIsDialogOpen(false)
     }
@@ -183,11 +226,20 @@ export default function PresupuestosPage() {
 
   const handleProductChange = (productId: string) => {
     const product = products.find((p) => p.id === productId)
-    setCurrentItem({
-      ...currentItem,
-      productId,
-      unitPrice: product?.salePrice ?? 0,
-    })
+    if (product) {
+      const pricing = calculateFinalProductPrice(
+        product,
+        families,
+        settings
+      )
+      setCurrentItem({
+        ...currentItem,
+        productId,
+        baseUnitPrice: pricing.basePrice,
+        marginPercentage: pricing.marginPercentage,
+        unitPrice: pricing.finalPrice,
+      })
+    }
   }
 
   const handleStatusChange = (budgetId: string, status: BudgetStatus) => {
@@ -201,6 +253,7 @@ export default function PresupuestosPage() {
       setBudgets(getBudgets())
     }
   }
+
 
   const handleDownloadPdf = (budget: Budget) => {
     const doc = new jsPDF()
@@ -220,14 +273,16 @@ export default function PresupuestosPage() {
     doc.text(budget.clientName, 14, 70)
     doc.text(budget.clientEmail, 14, 80)
 
-    // Add table
-    const tableColumn = ["Producto", "Cantidad", "Precio Unitario", "Subtotal"];
+    // Add table with margin information
+    const tableColumn = ["Producto", "Cantidad", "Precio Base", "Margen %", "Precio Final", "Subtotal"];
     const tableRows: (string | number)[][] = [];
 
     budget.items.forEach(item => {
       const itemData = [
         item.productName,
         item.quantity,
+        `$${item.baseUnitPrice.toLocaleString("es-CL")}`,
+        `${item.marginPercentage}%`,
         `$${item.unitPrice.toLocaleString("es-CL")}`,
         `$${item.subtotal.toLocaleString("es-CL")}`
       ];
@@ -294,7 +349,7 @@ export default function PresupuestosPage() {
           </Card>
         </div>
 
-        <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
+          <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
           <div className="flex flex-col sm:flex-row gap-4 w-full">
             <Input
               placeholder="Buscar por cliente o código"
@@ -315,12 +370,13 @@ export default function PresupuestosPage() {
             </Select>
           </div>
 
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={() => resetForm(false)}>
-                <Plus className="mr-2 h-4 w-4" /> Nuevo Presupuesto
-              </Button>
-            </DialogTrigger>
+          <div className="flex gap-2">
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <Button onClick={() => resetForm(false)}>
+                  <Plus className="mr-2 h-4 w-4" /> Nuevo Presupuesto
+                </Button>
+              </DialogTrigger>
             <DialogContent className="max-w-3xl">
               <DialogHeader>
                 <DialogTitle>Crear Presupuesto</DialogTitle>
@@ -403,7 +459,7 @@ export default function PresupuestosPage() {
                       Agregar
                     </Button>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                     <div className="md:col-span-2">
                       <Select value={currentItem.productId} onValueChange={handleProductChange}>
                         <SelectTrigger>
@@ -426,14 +482,34 @@ export default function PresupuestosPage() {
                         setCurrentItem({ ...currentItem, quantity: Number.parseInt(event.target.value) || 0 })
                       }
                     />
-                    <Input
-                      type="number"
-                      placeholder="Precio"
-                      value={currentItem.unitPrice}
-                      onChange={(event) =>
-                        setCurrentItem({ ...currentItem, unitPrice: Number.parseFloat(event.target.value) || 0 })
-                      }
-                    />
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground">Base: ${currentItem.baseUnitPrice.toLocaleString("es-CL")}</div>
+                      <Input
+                        type="number"
+                        placeholder="Precio Final"
+                        value={currentItem.unitPrice}
+                        onChange={(event) =>
+                          setCurrentItem({ ...currentItem, unitPrice: Number.parseFloat(event.target.value) || 0 })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground">Margen: {currentItem.marginPercentage}%</div>
+                      <Input
+                        type="number"
+                        placeholder="Margen %"
+                        value={currentItem.marginPercentage}
+                        onChange={(event) => {
+                          const newMargin = Number.parseFloat(event.target.value) || 0
+                          const newUnitPrice = currentItem.baseUnitPrice * (1 + newMargin / 100)
+                          setCurrentItem({ 
+                            ...currentItem, 
+                            marginPercentage: newMargin,
+                            unitPrice: newUnitPrice
+                          })
+                        }}
+                      />
+                    </div>
                   </div>
 
                   {formData.items.length > 0 && (
@@ -443,7 +519,9 @@ export default function PresupuestosPage() {
                           <TableRow>
                             <TableHead>Producto</TableHead>
                             <TableHead className="text-right">Cant.</TableHead>
-                            <TableHead className="text-right">Precio</TableHead>
+                            <TableHead className="text-right">Precio Base</TableHead>
+                            <TableHead className="text-right">Margen %</TableHead>
+                            <TableHead className="text-right">Precio Final</TableHead>
                             <TableHead className="text-right">Subtotal</TableHead>
                             <TableHead className="w-12" />
                           </TableRow>
@@ -453,6 +531,8 @@ export default function PresupuestosPage() {
                             <TableRow key={`${item.productId}-${index}`}>
                               <TableCell>{item.productName}</TableCell>
                               <TableCell className="text-right">{item.quantity}</TableCell>
+                              <TableCell className="text-right">${item.baseUnitPrice.toLocaleString("es-CL")}</TableCell>
+                              <TableCell className="text-right">{item.marginPercentage}%</TableCell>
                               <TableCell className="text-right">${item.unitPrice.toLocaleString("es-CL")}</TableCell>
                               <TableCell className="text-right">${item.subtotal.toLocaleString("es-CL")}</TableCell>
                               <TableCell className="text-right">
@@ -463,7 +543,7 @@ export default function PresupuestosPage() {
                             </TableRow>
                           ))}
                           <TableRow>
-                            <TableCell colSpan={3} className="text-right font-semibold">
+                            <TableCell colSpan={5} className="text-right font-semibold">
                               Total
                             </TableCell>
                             <TableCell className="text-right font-semibold">
@@ -487,6 +567,7 @@ export default function PresupuestosPage() {
               </div>
             </DialogContent>
           </Dialog>
+          </div>
         </div>
 
         <Card>
@@ -556,8 +637,7 @@ export default function PresupuestosPage() {
             </Table>
           </CardContent>
         </Card>
-
-                    </div>
+      </div>
     </div>
   )
 }

@@ -68,12 +68,9 @@ export function deleteProduct(id: string): void {
 // Families
 export function getFamilies(): Family[] {
   return getItem<Family[]>(KEYS.families, [
-    { id: "1", name: "Herramientas Manuales", margin: 20, description: "Martillos, destornilladores, llaves" },
-    { id: "2", name: "Herramientas Eléctricas", margin: 20, description: "Taladros, sierras, pulidoras" },
-    { id: "3", name: "Tornillería", margin: 20, description: "Tornillos, tuercas, arandelas" },
-    { id: "4", name: "Pinturas", margin: 20, description: "Pinturas, brochas, rodillos" },
-    { id: "5", name: "Plomería", margin: 20, description: "Tubos, conexiones, válvulas" },
-    { id: "6", name: "Electricidad", margin: 20, description: "Cables, interruptores, enchufes" },
+    { id: "1", name: "Herramientas Manuales", margin: 30, description: "Martillos, destornilladores, llaves" },
+    { id: "2", name: "Herramientas Eléctricas", margin: 30, description: "Taladros, sierras, pulidoras" },
+    { id: "3", name: "Materiales de Construcción", margin: 30, description: "Cementos, ladrillos, arena" },
   ])
 }
 
@@ -202,10 +199,9 @@ export function getCashRegisterStatus(): { isOpen: boolean; register: CashRegist
 // Settings
 export function getSettings(): AppSettings {
   return getItem<AppSettings>(KEYS.settings, {
-    generalMargin: 20,
     storeName: "Mi Ferretería",
-    storeAddress: "",
-    storePhone: "",
+    storeAddress: "Calle Falsa 123",
+    storePhone: "+569 1234 5678",
   })
 }
 

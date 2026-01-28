@@ -9,10 +9,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Search, Pencil, Trash2, Package, AlertTriangle, DollarSign, Calculator, Save } from "lucide-react"
+import { Plus, Search, Pencil, Trash2, Package, AlertTriangle, DollarSign, Calculator, Save, TrendingUp } from "lucide-react"
 import {
   getProducts,
   getFamilies,
@@ -24,6 +25,7 @@ import {
   saveFamilies,
   saveProducts,
 } from "@/lib/storage"
+import { roundPrice } from "@/lib/pricing"
 import type { Product, Family, AppSettings } from "@/lib/types"
 
 export default function InventarioPage() {
@@ -34,7 +36,7 @@ export default function InventarioPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
-  const [generalMargin, setGeneralMargin] = useState<number | null>(null)
+  const [productRounding, setProductRounding] = useState<{[key: string]: boolean}>({})
   const [formData, setFormData] = useState({
     code: "",
     name: "",
@@ -49,23 +51,39 @@ export default function InventarioPage() {
 
   useEffect(() => {
     setProducts(getProducts())
-    setFamilies(getFamilies())
+    const loadedFamilies = getFamilies()
+    
+    // Asegurar que todas las familias tengan 30% como mínimo
+    const familiesWithMargin = loadedFamilies.map(family => ({
+      ...family,
+      margin: family.margin || 30
+    }))
+    
+    setFamilies(familiesWithMargin)
     setSettings(getSettings())
+    
+    // Load product rounding checkboxes from localStorage
+    const storedProductRounding = localStorage.getItem('ferreteria_product_rounding')
+    if (storedProductRounding) {
+      try {
+        setProductRounding(JSON.parse(storedProductRounding))
+      } catch (error) {
+        console.error('Error loading product rounding:', error)
+      }
+    }
   }, [])
 
-  useEffect(() => {
-    if (settings) {
-      setGeneralMargin(settings.generalMargin)
-    }
-  }, [settings])
-
   const calculateSalePrice = (cost: number, familyId?: string) => {
-    if (!settings) return 0
-
     const family = families.find((f) => f.id === familyId)
-    const margin = family ? family.margin : settings.generalMargin
+    const margin = family?.margin || 30 // Por defecto 30%
     const salePrice = cost * (1 + margin / 100)
     return Math.round(salePrice)
+  }
+
+  // Función para detectar si un precio está redondeado
+  const isRoundedPrice = (price: number): boolean => {
+    const priceStr = price.toString()
+    return priceStr.endsWith('90') || priceStr.endsWith('990')
   }
 
   const filteredProducts = products.filter((p) => {
@@ -77,17 +95,26 @@ export default function InventarioPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    
+    // Calcular precio de venta con 30% si no está definido
+    let finalFormData = { ...formData }
+    if (finalFormData.salePrice === 0 && finalFormData.costPrice > 0) {
+      const family = families.find((f) => f.id === finalFormData.familyId)
+      const margin = family?.margin || 30
+      finalFormData.salePrice = finalFormData.costPrice * (1 + margin / 100)
+    }
+    
     if (editingProduct) {
       const updated: Product = {
         ...editingProduct,
-        ...formData,
+        ...finalFormData,
         updatedAt: new Date().toISOString(),
       }
       updateProduct(updated)
     } else {
       const newProduct: Product = {
         id: crypto.randomUUID(),
-        ...formData,
+        ...finalFormData,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }
@@ -140,31 +167,12 @@ export default function InventarioPage() {
     return families.find((f) => f.id === familyId)?.name || "Sin familia"
   }
 
-  const handleSaveGeneralMargin = () => {
-    if (generalMargin === null || Number.isNaN(generalMargin) || generalMargin < 0) {
-      alert("El margen general debe ser un número válido mayor o igual a 0")
-      return
-    }
-    if (!settings) return
-
-    const updatedSettings = { ...settings, generalMargin }
-    saveSettings(updatedSettings)
-    setSettings(updatedSettings)
-    alert("Margen general guardado correctamente")
-  }
-
   const handleFamilyMarginChange = (familyId: string, margin: number) => {
-    setFamilies((prev) => prev.map((family) => (family.id === familyId ? { ...family, margin } : family)))
-  }
-
-  const handleSaveFamilyMargins = () => {
-    const hasInvalid = families.some((family) => Number.isNaN(family.margin) || family.margin < 0)
-    if (hasInvalid) {
-      alert("Todos los márgenes deben ser números válidos mayores o iguales a 0")
-      return
-    }
-    saveFamilies(families)
-    alert("Márgenes por familia guardados correctamente")
+    const updatedFamilies = families.map((family) => 
+      family.id === familyId ? { ...family, margin } : family
+    )
+    setFamilies(updatedFamilies)
+    saveFamilies(updatedFamilies) // Guardar automáticamente
   }
 
   const applyMarginToFamily = (familyId: string) => {
@@ -186,27 +194,6 @@ export default function InventarioPage() {
     saveProducts(updatedProducts)
     setProducts(updatedProducts)
     alert(`Precios actualizados para ${family.name}`)
-  }
-
-  const applyGeneralMargin = () => {
-    if (generalMargin === null || Number.isNaN(generalMargin)) {
-      alert("Debes definir un margen general válido")
-      return
-    }
-    const updatedProducts = products.map((product) => {
-      if (product.costPrice > 0) {
-        const salePrice = product.costPrice * (1 + generalMargin / 100)
-        return {
-          ...product,
-          salePrice,
-          updatedAt: new Date().toISOString(),
-        }
-      }
-      return product
-    })
-    saveProducts(updatedProducts)
-    setProducts(updatedProducts)
-    alert("Margen general aplicado a todos los productos")
   }
 
   const getProductCount = (familyId: string) => products.filter((product) => product.familyId === familyId).length
@@ -464,41 +451,6 @@ export default function InventarioPage() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <DollarSign className="h-5 w-5" /> Margen General
-              </CardTitle>
-              <CardDescription>Define el margen de ganancia base que se aplica a todos los productos.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex flex-wrap items-end gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="generalMargin">Margen (%)</Label>
-                  <Input
-                    id="generalMargin"
-                    type="number"
-                    className="w-32"
-                    value={generalMargin ?? ""}
-                    onChange={(e) => setGeneralMargin(Number.parseFloat(e.target.value))}
-                  />
-                </div>
-                <Button onClick={handleSaveGeneralMargin}>
-                  <Save className="mr-2 h-4 w-4" /> Guardar
-                </Button>
-                <Button variant="outline" onClick={applyGeneralMargin}>
-                  <Calculator className="mr-2 h-4 w-4" /> Aplicar a todos
-                </Button>
-              </div>
-              {generalMargin !== null && !Number.isNaN(generalMargin) && (
-                <p className="text-sm text-muted-foreground">
-                  Ejemplo: con un costo de $100 y margen de {generalMargin}%, el precio sería $
-                  {(100 * (1 + generalMargin / 100)).toFixed(2)}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
                 <Calculator className="h-5 w-5" /> Márgenes por familia
               </CardTitle>
               <CardDescription>Ajusta márgenes específicos por familia y aplica los cambios al inventario.</CardDescription>
@@ -510,7 +462,7 @@ export default function InventarioPage() {
                     <TableRow>
                       <TableHead>Familia</TableHead>
                       <TableHead className="text-center">Productos</TableHead>
-                      <TableHead className="text-center">Margen promedio</TableHead>
+                      <TableHead className="text-center">Margen aplicado</TableHead>
                       <TableHead className="text-center">Nuevo margen (%)</TableHead>
                       <TableHead className="text-right">Acciones</TableHead>
                     </TableRow>
@@ -523,16 +475,16 @@ export default function InventarioPage() {
                           <Badge variant="secondary">{getProductCount(family.id)}</Badge>
                         </TableCell>
                         <TableCell className="text-center">
-                          <Badge variant={getAverageMargin(family.id) >= family.margin ? "default" : "destructive"}>
-                            {getAverageMargin(family.id).toFixed(1)}%
+                          <Badge variant={family.margin < 30 ? "secondary" : "default"} className={family.margin < 30 ? "bg-yellow-500 text-white" : ""}>
+                            {family.margin.toFixed(1)}%
                           </Badge>
                         </TableCell>
                         <TableCell className="text-center">
                           <Input
                             type="number"
-                            className="mx-auto w-24"
-                            value={family.margin}
-                            onChange={(e) => handleFamilyMarginChange(family.id, Number.parseFloat(e.target.value))}
+                            className="mx-auto w-24 text-blue-600 border-blue-300 focus:border-blue-500 focus:ring-blue-500"
+                            value={family.margin || 30}
+                            onChange={(e) => handleFamilyMarginChange(family.id, Number.parseFloat(e.target.value) || 30)}
                           />
                         </TableCell>
                         <TableCell className="text-right">
@@ -544,11 +496,6 @@ export default function InventarioPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
-              <div className="flex justify-end">
-                <Button onClick={handleSaveFamilyMargins}>
-                  <Save className="mr-2 h-4 w-4" /> Guardar márgenes
-                </Button>
               </div>
             </CardContent>
           </Card>
@@ -567,20 +514,28 @@ export default function InventarioPage() {
                   <TableHead className="text-right">Costo</TableHead>
                   <TableHead className="text-right">Venta</TableHead>
                   <TableHead className="text-right">Margen</TableHead>
+                  <TableHead className="text-center">Redondeo</TableHead>
                   <TableHead className="text-right">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredProducts.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                       No hay productos registrados
                     </TableCell>
                   </TableRow>
                 ) : (
                   filteredProducts.map((product) => {
-                    const margin =
-                      product.costPrice > 0 ? ((product.salePrice - product.costPrice) / product.costPrice) * 100 : 0
+                    // Calcular margen real o usar margen de familia si es inválido
+                    let margin = 0
+                    if (product.costPrice > 0 && product.salePrice > 0) {
+                      margin = ((product.salePrice - product.costPrice) / product.costPrice) * 100
+                    } else {
+                      // Usar margen de la familia si el cálculo es inválido
+                      const family = families.find((f) => f.id === product.familyId)
+                      margin = family?.margin || 30
+                    }
                     return (
                       <TableRow key={product.id}>
                         <TableCell className="font-mono text-sm">{product.code}</TableCell>
@@ -594,9 +549,67 @@ export default function InventarioPage() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">${product.costPrice.toFixed(2)}</TableCell>
-                        <TableCell className="text-right">${product.salePrice.toFixed(2)}</TableCell>
                         <TableCell className="text-right">
-                          <Badge variant={margin >= 20 ? "default" : "destructive"}>{margin.toFixed(1)}%</Badge>
+                          <div className="flex items-center justify-end gap-1">
+                            <span>${product.salePrice.toFixed(2)}</span>
+                            {isRoundedPrice(product.salePrice) && (
+                              <TrendingUp className="h-4 w-4 text-purple-600" />
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <Input
+                              type="number"
+                              className="w-16 h-8 text-blue-600 border-blue-300 text-right"
+                              value={margin.toFixed(1)}
+                              onChange={(e) => {
+                                const newMargin = Number.parseFloat(e.target.value) || 0
+                                const updatedProducts = products.map(p => {
+                                  if (p.id === product.id && p.costPrice > 0) {
+                                    const newSalePrice = p.costPrice * (1 + newMargin / 100)
+                                    return { ...p, salePrice: newSalePrice }
+                                  }
+                                  return p
+                                })
+                                setProducts(updatedProducts)
+                                saveProducts(updatedProducts)
+                              }}
+                            />
+                            <span className="text-green-600 font-medium text-sm">%</span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Checkbox
+                            checked={productRounding[product.id] || false}
+                            onCheckedChange={() => {
+                              const newProductRounding = {
+                                ...productRounding,
+                                [product.id]: !productRounding[product.id]
+                              }
+                              setProductRounding(newProductRounding)
+                              localStorage.setItem('ferreteria_product_rounding', JSON.stringify(newProductRounding))
+                              
+                              // Aplicar o quitar redondeo al producto
+                              const updatedProducts = products.map(p => {
+                                if (p.id === product.id) {
+                                  if (!productRounding[product.id]) {
+                                    // Activar redondeo: solo redondear el precio de venta actual
+                                    return { ...p, salePrice: roundPrice(p.salePrice, 990) }
+                                  } else {
+                                    // Desactivar redondeo: volver al precio con margen aplicado
+                                    const marginPercentage = 30 // Por defecto 30%
+                                    const basePrice = p.costPrice || (p.salePrice / (1 + marginPercentage / 100))
+                                    const priceWithMargin = basePrice * (1 + marginPercentage / 100)
+                                    return { ...p, salePrice: priceWithMargin }
+                                  }
+                                }
+                                return p
+                              })
+                              setProducts(updatedProducts)
+                              saveProducts(updatedProducts)
+                            }}
+                          />
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">

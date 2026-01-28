@@ -72,7 +72,6 @@ export interface CashRegister {
 }
 
 export interface AppSettings {
-  generalMargin: number
   storeName: string
   storeAddress: string
   storePhone: string
@@ -120,7 +119,9 @@ export interface BudgetItem {
   productId: string
   productName: string
   quantity: number
-  unitPrice: number
+  baseUnitPrice: number // Precio base sin margen
+  marginPercentage: number // Porcentaje de margen aplicado
+  unitPrice: number // Precio final con margen
   subtotal: number
 }
 

@@ -6,13 +6,12 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Save, Store, Trash2 } from "lucide-react"
+import { Save, Store, Trash2, Settings } from "lucide-react"
 import { getSettings, saveSettings } from "@/lib/storage"
 import type { AppSettings } from "@/lib/types"
 
 export default function ConfiguracionPage() {
   const [settings, setSettings] = useState<AppSettings>({
-    generalMargin: 30,
     storeName: "",
     storeAddress: "",
     storePhone: "",
@@ -73,21 +72,6 @@ export default function ConfiguracionPage() {
                 id="storeAddress"
                 value={settings.storeAddress}
                 onChange={(e) => setSettings({ ...settings, storeAddress: e.target.value })}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="generalMargin">Margen General Predeterminado (%)</Label>
-              <Input
-                id="generalMargin"
-                type="number"
-                value={settings.generalMargin}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    generalMargin: Number.parseFloat(e.target.value) || 0,
-                  })
-                }
-                className="w-32"
               />
             </div>
             <Button onClick={handleSave}>
